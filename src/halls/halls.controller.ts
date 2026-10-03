@@ -19,7 +19,8 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CreateHallDto } from './dto/create-hall.dto.js';
-import { Hall, HallWithSeats } from './entities/hall.entity.js';
+import { HallWithSeats } from './dto/hall-with-seats.dto.js';
+import { Hall } from './entities/hall.entity.js';
 import { HallsService } from './halls.service.js';
 
 @ApiTags('halls')
@@ -34,13 +35,13 @@ export class HallsController {
       'Поле відсутнє, має неправильний тип або число не є цілим додатним',
   })
   @ApiConflictResponse({ description: 'Зал з такою назвою вже існує' })
-  create(@Body() dto: CreateHallDto): Hall {
+  async create(@Body() dto: CreateHallDto): Promise<Hall> {
     return this.hallsService.create(dto);
   }
 
   @Get()
   @ApiOkResponse({ type: [Hall] })
-  findAll(): Hall[] {
+  async findAll(): Promise<Hall[]> {
     return this.hallsService.findAll();
   }
 
@@ -48,7 +49,9 @@ export class HallsController {
   @ApiOkResponse({ type: HallWithSeats })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Зал не знайдено' })
-  findOne(@Param('id', ParseUUIDPipe) id: string): HallWithSeats {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<HallWithSeats> {
     return this.hallsService.findOneWithSeats(id);
   }
 
@@ -58,7 +61,7 @@ export class HallsController {
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Зал не знайдено' })
   @ApiConflictResponse({ description: 'На зал посилається хоча б один сеанс' })
-  remove(@Param('id', ParseUUIDPipe) id: string): void {
-    this.hallsService.remove(id);
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    await this.hallsService.remove(id);
   }
 }

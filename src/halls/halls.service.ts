@@ -4,44 +4,52 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { isUniqueViolation } from '../common/database-errors.js';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
 import { CreateHallDto } from './dto/create-hall.dto.js';
-import { Hall, HallWithSeats, Seat } from './entities/hall.entity.js';
+import { HallWithSeats, Seat } from './dto/hall-with-seats.dto.js';
+import { Hall } from './entities/hall.entity.js';
 
 @Injectable()
 export class HallsService {
   private readonly logger = new Logger(HallsService.name);
-  private halls: Hall[] = [];
 
-  constructor(private readonly showingsCore: ShowingsCoreService) {}
+  constructor(
+    @InjectRepository(Hall)
+    private readonly hallsRepository: Repository<Hall>,
+    private readonly showingsCore: ShowingsCoreService,
+  ) {}
 
-  create(dto: CreateHallDto): Hall {
-    const nameTaken = this.halls.some(
-      (hall) => hall.name.toLowerCase() === dto.name.toLowerCase(),
-    );
+  async create(dto: CreateHallDto): Promise<Hall> {
+    // Унікальний індекс у БД чутливий до регістру, тому "зал 1" і "Зал 1" перевіряємо тут
+    const nameTaken = await this.hallsRepository
+      .createQueryBuilder('hall')
+      .where('LOWER(hall.name) = LOWER(:name)', { name: dto.name })
+      .getExists();
     if (nameTaken) {
-      this.logger.warn(`Відмова створити зал: назва "${dto.name}" зайнята`);
-      throw new ConflictException(`Зал з назвою "${dto.name}" вже існує`);
+      throw this.nameConflict(dto.name);
     }
 
-    const hall: Hall = {
-      id: randomUUID(),
-      name: dto.name,
-      rows: dto.rows,
-      seatsPerRow: dto.seatsPerRow,
-    };
-    this.halls.push(hall);
-    return hall;
+    try {
+      return await this.hallsRepository.save(this.hallsRepository.create(dto));
+    } catch (error) {
+      // Два одночасні запити з тією самою назвою: другий відхилить unique-індекс
+      if (isUniqueViolation(error)) {
+        throw this.nameConflict(dto.name);
+      }
+      throw error;
+    }
   }
 
-  findAll(): Hall[] {
-    return this.halls;
+  async findAll(): Promise<Hall[]> {
+    return this.hallsRepository.find();
   }
 
-  findOne(id: string): Hall {
-    const hall = this.findById(id);
-    if (!hall) {
+  async findOne(id: string): Promise<Hall> {
+    const hall = await this.findById(id);
+    if (hall === null) {
       this.logger.warn(`Зал з id ${id} не знайдено`);
       throw new NotFoundException(`Зал з id ${id} не знайдено`);
     }
@@ -49,12 +57,12 @@ export class HallsService {
   }
 
   /** Те саме, що findOne, але без винятку — для перевірок в інших модулях. */
-  findById(id: string): Hall | undefined {
-    return this.halls.find((hall) => hall.id === id);
+  async findById(id: string): Promise<Hall | null> {
+    return this.hallsRepository.findOneBy({ id });
   }
 
-  findOneWithSeats(id: string): HallWithSeats {
-    const hall = this.findOne(id);
+  async findOneWithSeats(id: string): Promise<HallWithSeats> {
+    const hall = await this.findOne(id);
     return {
       id: hall.id,
       name: hall.name,
@@ -81,9 +89,9 @@ export class HallsService {
     );
   }
 
-  remove(id: string): void {
-    this.findOne(id);
-    if (this.showingsCore.hasShowingsForHall(id)) {
+  async remove(id: string): Promise<void> {
+    const hall = await this.findOne(id);
+    if (await this.showingsCore.hasShowingsForHall(id)) {
       this.logger.warn(
         `Відмова видалити зал ${id}: на нього посилаються сеанси`,
       );
@@ -91,6 +99,11 @@ export class HallsService {
         'Зал не можна видалити: на нього посилається хоча б один сеанс',
       );
     }
-    this.halls = this.halls.filter((hall) => hall.id !== id);
+    await this.hallsRepository.remove(hall);
+  }
+
+  private nameConflict(name: string): ConflictException {
+    this.logger.warn(`Відмова створити зал: назва "${name}" зайнята`);
+    return new ConflictException(`Зал з назвою "${name}" вже існує`);
   }
 }

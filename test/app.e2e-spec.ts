@@ -1,15 +1,69 @@
+/// <reference types="vite/client" />
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import 'dotenv/config';
+import { Client } from 'pg';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
+import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module.js';
+
+// e2e працює з окремою базою, щоб не чіпати дані розробки.
+// ConfigModule не перезаписує змінні, які вже є в process.env.
+process.env.POSTGRES_DB = `${process.env.POSTGRES_DB}_test`;
+
+// Класи міграцій напряму з src/ (CLI бере їх із dist/)
+const migrations = Object.values(
+  import.meta.glob<Record<string, Function>>('../src/migrations/*.ts', {
+    eager: true,
+  }),
+).flatMap((module) => Object.values(module));
 
 const MISSING_ID = '00000000-0000-4000-8000-000000000000';
 const tomorrow = () => new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
+async function prepareTestDatabase() {
+  const client = new Client({
+    host: process.env.POSTGRES_HOST,
+    port: Number(process.env.POSTGRES_PORT),
+    user: process.env.POSTGRES_USER,
+    password: process.env.POSTGRES_PASSWORD,
+    database: 'postgres',
+  });
+  await client.connect();
+  const db = process.env.POSTGRES_DB!;
+  const { rowCount } = await client.query(
+    'SELECT 1 FROM pg_database WHERE datname = $1',
+    [db],
+  );
+  if (rowCount === 0) {
+    await client.query(`CREATE DATABASE "${db}"`);
+  }
+  await client.end();
+
+  // Схема — тими самими міграціями, що й у розробці
+  const migrator = new DataSource({
+    type: 'postgres',
+    uuidExtension: 'pgcrypto',
+    host: process.env.POSTGRES_HOST,
+    port: Number(process.env.POSTGRES_PORT),
+    username: process.env.POSTGRES_USER,
+    password: process.env.POSTGRES_PASSWORD,
+    database: db,
+    migrations,
+  });
+  await migrator.initialize();
+  await migrator.runMigrations();
+  await migrator.destroy();
+}
+
 describe('Cinema API (e2e)', () => {
   let app: INestApplication<App>;
   let http: ReturnType<typeof request>;
+
+  beforeAll(async () => {
+    await prepareTestDatabase();
+  });
 
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -19,6 +73,11 @@ describe('Cinema API (e2e)', () => {
     app = moduleFixture.createNestApplication();
     await app.init();
     http = request(app.getHttpServer());
+
+    // Кожен тест — з чистого аркуша
+    await app
+      .get(DataSource)
+      .query('TRUNCATE booking_seats, bookings, showings, films, halls');
   });
 
   afterEach(async () => {
@@ -171,17 +230,55 @@ describe('Cinema API (e2e)', () => {
         .query({ filmId: filmA, date: '2030-05-02' })
         .expect(200);
 
-      expect(res.body).toHaveLength(3);
-      expect(res.body.map((s: { startsAt: string }) => s.startsAt)).toEqual([
+      expect(res.body).toMatchObject({ total: 3, page: 1, limit: 20 });
+      const items = res.body.items;
+      expect(items.map((s: { startsAt: string }) => s.startsAt)).toEqual([
         '2030-05-02T10:00:00.000Z',
         '2030-05-02T10:00:00.000Z',
         '2030-05-02T20:00:00.000Z',
       ]);
-      expect(res.body[0].id < res.body[1].id).toBe(true);
-      expect(res.body[0]).toMatchObject({ filmTitle: 'A', hallName: 'Зал 1' });
-      expect(res.body[0]).not.toHaveProperty('filmId');
+      expect(items[0].id < items[1].id).toBe(true);
+      expect(items[0]).toMatchObject({ filmTitle: 'A', hallName: 'Зал 1' });
+      expect(items[0]).not.toHaveProperty('filmId');
 
       await http.get('/showings').query({ date: '02.05.2030' }).expect(400);
+    });
+
+    it('paginates and sorts in the database', async () => {
+      const filmId = await createFilm();
+      const hallId = await createHall();
+      for (const day of ['01', '02', '03', '04', '05']) {
+        await createShowing(filmId, hallId, `2030-06-${day}T10:00:00Z`);
+      }
+
+      const page2 = await http
+        .get('/showings')
+        .query({ page: 2, limit: 2 })
+        .expect(200);
+      expect(page2.body).toMatchObject({ total: 5, page: 2, limit: 2 });
+      expect(
+        page2.body.items.map((s: { startsAt: string }) => s.startsAt),
+      ).toEqual(['2030-06-03T10:00:00.000Z', '2030-06-04T10:00:00.000Z']);
+
+      const desc = await http
+        .get('/showings')
+        .query({ sort: 'desc', limit: 1 })
+        .expect(200);
+      expect(desc.body.total).toBe(5);
+      expect(desc.body.items).toHaveLength(1);
+      expect(desc.body.items[0].startsAt).toBe('2030-06-05T10:00:00.000Z');
+
+      for (const query of [
+        { page: 0 },
+        { page: 1.5 },
+        { limit: 0 },
+        { limit: 101 },
+        { limit: 'ten' },
+        { sort: 'up' },
+        { filmId: 'not-a-uuid' },
+      ]) {
+        await http.get('/showings').query(query).expect(400);
+      }
     });
   });
 
@@ -220,10 +317,33 @@ describe('Cinema API (e2e)', () => {
         return res.body.filter((s: { isBooked: boolean }) => s.isBooked).length;
       };
       expect(await booked()).toBe(2);
+      const all = await http.get('/bookings').expect(200);
+      expect(all.body).toHaveLength(1);
 
       await http.delete(`/bookings/${booking.body.id}`).expect(204);
       expect(await booked()).toBe(0);
       await http.delete(`/bookings/${booking.body.id}`).expect(404);
+    });
+
+    it('sells a seat only once under concurrent requests', async () => {
+      const showingId = await createShowing(
+        await createFilm(),
+        await createHall('Зал 1', 3, 5),
+      );
+      const book = () =>
+        http
+          .post(`/showings/${showingId}/bookings`)
+          .send({ seats: [{ row: 2, seat: 2 }] });
+
+      const statuses = (await Promise.all([book(), book(), book()]))
+        .map((res) => res.status)
+        .sort((a, b) => a - b);
+      expect(statuses).toEqual([201, 409, 409]);
+
+      const bookings = await http
+        .get(`/showings/${showingId}/bookings`)
+        .expect(200);
+      expect(bookings.body).toHaveLength(1);
     });
 
     it('rejects invalid seat lists', async () => {

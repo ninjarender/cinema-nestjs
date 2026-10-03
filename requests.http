@@ -8,6 +8,7 @@
 @filmId = {{createFilm.response.body.$.id}}
 @otherFilmId = {{createOtherFilm.response.body.$.id}}
 @hallId = {{createHall.response.body.$.id}}
+@hallName = {{createHall.response.body.$.name}}
 @otherHallId = {{createOtherHall.response.body.$.id}}
 @showingId = {{createShowing.response.body.$.id}}
 @bookingId = {{createBooking.response.body.$.id}}
@@ -92,13 +93,13 @@ Content-Type: application/json
 
 ######################## ЗАЛИ ########################
 
-### Створити зал 3 × 5 → 201
+### Створити зал 3 × 5 → 201 (випадковий номер у назві — щоб файл можна було проганяти повторно)
 # @name createHall
 POST {{baseUrl}}/halls
 Content-Type: application/json
 
 {
-  "name": "Зал 1",
+  "name": "Зал {{$randomInt 1000 9999}}",
   "rows": 3,
   "seatsPerRow": 5
 }
@@ -109,7 +110,7 @@ POST {{baseUrl}}/halls
 Content-Type: application/json
 
 {
-  "name": "Малий зал",
+  "name": "Камерний зал {{$randomInt 1000 9999}}",
   "rows": 2,
   "seatsPerRow": 4
 }
@@ -119,7 +120,7 @@ POST {{baseUrl}}/halls
 Content-Type: application/json
 
 {
-  "name": "Зал 1",
+  "name": "{{hallName}}",
   "rows": 10,
   "seatsPerRow": 10
 }
@@ -233,8 +234,14 @@ Content-Type: application/json
   "price": 125.5
 }
 
-### Усі сеанси (за часом початку, потім за id) → 200
+### Усі сеанси: перша сторінка { items, total, page: 1, limit: 20 } (за часом початку, потім за id) → 200
 GET {{baseUrl}}/showings
+
+### Пагінація: друга сторінка по одному сеансу → 200
+GET {{baseUrl}}/showings?page=2&limit=1
+
+### Сортування: найпізніші сеанси першими → 200
+GET {{baseUrl}}/showings?sort=desc
 
 ### Сеанси фільму → 200
 GET {{baseUrl}}/showings?filmId={{filmId}}
@@ -244,6 +251,24 @@ GET {{baseUrl}}/showings?filmId={{filmId}}&date={{$datetime 'YYYY-MM-DD' 1 d}}
 
 ### Помилка: date не відповідає формату YYYY-MM-DD → 400
 GET {{baseUrl}}/showings?date=01.12.2030
+
+### Помилка: filmId не є UUID → 400
+GET {{baseUrl}}/showings?filmId=abc
+
+### Помилка: page менше 1 → 400
+GET {{baseUrl}}/showings?page=0
+
+### Помилка: page не ціле → 400
+GET {{baseUrl}}/showings?page=1.5
+
+### Помилка: limit більше 100 → 400
+GET {{baseUrl}}/showings?limit=101
+
+### Помилка: limit не число → 400
+GET {{baseUrl}}/showings?limit=ten
+
+### Помилка: sort не asc і не desc → 400
+GET {{baseUrl}}/showings?sort=up
 
 ### Один сеанс з назвами фільму й залу → 200
 GET {{baseUrl}}/showings/{{showingId}}
@@ -272,7 +297,8 @@ Content-Type: application/json
   ]
 }
 
-### Помилка: одне з місць уже заброньоване → 409 (ряд 2 місце 1 при цьому НЕ бронюється)
+### Помилка: одне з місць уже заброньоване → 409
+### Транзакція відкочується: ряд 2 місце 1 НЕ бронюється, нового бронювання в БД немає
 POST {{baseUrl}}/showings/{{showingId}}/bookings
 Content-Type: application/json
 

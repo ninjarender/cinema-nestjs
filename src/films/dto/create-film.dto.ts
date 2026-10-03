@@ -6,6 +6,7 @@ import {
   IsPositive,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -16,6 +17,7 @@ export class CreateFilmDto {
   )
   @IsString()
   @IsNotEmpty()
+  @MaxLength(255) // дублює length колонки → 400, а не помилка PG
   title: string;
 
   @ApiProperty({
