@@ -4,7 +4,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
 import { CreateFilmDto } from './dto/create-film.dto.js';
 import { UpdateFilmDto } from './dto/update-film.dto.js';
@@ -13,28 +14,25 @@ import { Film } from './entities/film.entity.js';
 @Injectable()
 export class FilmsService {
   private readonly logger = new Logger(FilmsService.name);
-  private films: Film[] = [];
 
-  constructor(private readonly showingsCore: ShowingsCoreService) {}
+  constructor(
+    @InjectRepository(Film)
+    private readonly filmsRepository: Repository<Film>,
+    private readonly showingsCore: ShowingsCoreService,
+  ) {}
 
-  create(dto: CreateFilmDto): Film {
-    const film: Film = {
-      id: randomUUID(),
-      title: dto.title,
-      durationMinutes: dto.durationMinutes,
-      releaseYear: dto.releaseYear,
-    };
-    this.films.push(film);
-    return film;
+  async create(dto: CreateFilmDto): Promise<Film> {
+    const film = this.filmsRepository.create(dto);
+    return this.filmsRepository.save(film);
   }
 
-  findAll(): Film[] {
-    return this.films;
+  async findAll(): Promise<Film[]> {
+    return this.filmsRepository.find();
   }
 
-  findOne(id: string): Film {
-    const film = this.findById(id);
-    if (!film) {
+  async findOne(id: string): Promise<Film> {
+    const film = await this.findById(id);
+    if (film === null) {
       this.logger.warn(`Фільм з id ${id} не знайдено`);
       throw new NotFoundException(`Фільм з id ${id} не знайдено`);
     }
@@ -42,19 +40,23 @@ export class FilmsService {
   }
 
   /** Те саме, що findOne, але без винятку — для перевірок в інших модулях. */
-  findById(id: string): Film | undefined {
-    return this.films.find((film) => film.id === id);
+  async findById(id: string): Promise<Film | null> {
+    return this.filmsRepository.findOneBy({ id });
   }
 
-  update(id: string, dto: UpdateFilmDto): Film {
-    const film = this.findOne(id);
-    Object.assign(film, dto);
-    return film;
+  async update(id: string, dto: UpdateFilmDto): Promise<Film> {
+    const film = await this.filmsRepository.preload({ id, ...dto });
+    if (film === undefined) {
+      this.logger.warn(`Фільм з id ${id} не знайдено`);
+      throw new NotFoundException(`Фільм з id ${id} не знайдено`);
+    }
+    return this.filmsRepository.save(film);
   }
 
-  remove(id: string): void {
-    this.findOne(id);
-    if (this.showingsCore.hasShowingsForFilm(id)) {
+  async remove(id: string): Promise<void> {
+    const film = await this.findOne(id);
+    // Каскадного видалення сеансів немає: FK showings.film_id теж не дасть видалити фільм
+    if (await this.showingsCore.hasShowingsForFilm(id)) {
       this.logger.warn(
         `Відмова видалити фільм ${id}: на нього посилаються сеанси`,
       );
@@ -62,6 +64,6 @@ export class FilmsService {
         'Фільм не можна видалити: на нього посилається хоча б один сеанс',
       );
     }
-    this.films = this.films.filter((film) => film.id !== id);
+    await this.filmsRepository.remove(film);
   }
 }

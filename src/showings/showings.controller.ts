@@ -16,7 +16,9 @@ import {
 } from '@nestjs/swagger';
 import { CreateShowingDto } from './dto/create-showing.dto.js';
 import { FindShowingsQueryDto } from './dto/find-showings-query.dto.js';
-import { Showing, ShowingView } from './entities/showing.entity.js';
+import { PaginatedShowingsDto } from './dto/paginated-showings.dto.js';
+import { ShowingView } from './dto/showing-view.dto.js';
+import { Showing } from './entities/showing.entity.js';
 import { ShowingsService } from './showings.service.js';
 
 @ApiTags('showings')
@@ -30,20 +32,23 @@ export class ShowingsController {
     description:
       'Фільму або залу немає; startsAt не ISO 8601 або в минулому; price не ціле додатне',
   })
-  create(@Body() dto: CreateShowingDto): Showing {
+  async create(@Body() dto: CreateShowingDto): Promise<Showing> {
     return this.showingsService.create(dto);
   }
 
   @Get()
   @ApiOkResponse({
-    type: [ShowingView],
+    type: PaginatedShowingsDto,
     description:
-      'Відсортовано за startsAt за зростанням, при рівному часі — за id',
+      'Сторінка сеансів, відсортованих за startsAt (sort), при рівному часі — за id',
   })
   @ApiBadRequestResponse({
-    description: 'date не відповідає формату YYYY-MM-DD',
+    description:
+      'filmId не UUID; date не YYYY-MM-DD; page/limit не цілі або поза межами; sort не asc/desc',
   })
-  findAll(@Query() query: FindShowingsQueryDto): ShowingView[] {
+  async findAll(
+    @Query() query: FindShowingsQueryDto,
+  ): Promise<PaginatedShowingsDto> {
     return this.showingsService.findAll(query);
   }
 
@@ -51,7 +56,7 @@ export class ShowingsController {
   @ApiOkResponse({ type: ShowingView })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Сеанс не знайдено' })
-  findOne(@Param('id', ParseUUIDPipe) id: string): ShowingView {
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<ShowingView> {
     return this.showingsService.findOne(id);
   }
 }

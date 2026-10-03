@@ -1,5 +1,13 @@
 import { plainToInstance } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min, validateSync } from 'class-validator';
+import {
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  validateSync,
+} from 'class-validator';
 
 export class EnvironmentVariables {
   @IsOptional()
@@ -7,6 +15,28 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(65535)
   PORT: number = 3000;
+
+  // Параметри підключення до PostgreSQL: без них застосунок не стартує
+  @IsString()
+  @IsNotEmpty()
+  POSTGRES_HOST: string;
+
+  @IsInt()
+  @Min(1)
+  @Max(65535)
+  POSTGRES_PORT: number;
+
+  @IsString()
+  @IsNotEmpty()
+  POSTGRES_USER: string;
+
+  @IsString()
+  @IsNotEmpty()
+  POSTGRES_PASSWORD: string;
+
+  @IsString()
+  @IsNotEmpty()
+  POSTGRES_DB: string;
 }
 
 export function validate(

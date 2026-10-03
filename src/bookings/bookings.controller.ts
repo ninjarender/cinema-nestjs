@@ -19,8 +19,8 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { BookingsService } from './bookings.service.js';
+import { BookingView, SeatAvailability } from './dto/booking-view.dto.js';
 import { CreateBookingDto } from './dto/create-booking.dto.js';
-import { Booking, SeatAvailability } from './entities/booking.entity.js';
 
 /**
  * Маршрути бронювань і зайнятості місць.
@@ -33,8 +33,8 @@ export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
   @Get('bookings')
-  @ApiOkResponse({ type: [Booking] })
-  findAll(): Booking[] {
+  @ApiOkResponse({ type: [BookingView] })
+  async findAll(): Promise<BookingView[]> {
     return this.bookingsService.findAll();
   }
 
@@ -45,12 +45,12 @@ export class BookingsController {
   })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Бронювання не знайдено' })
-  remove(@Param('id', ParseUUIDPipe) id: string): void {
-    this.bookingsService.remove(id);
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    await this.bookingsService.remove(id);
   }
 
   @Post('showings/:id/bookings')
-  @ApiCreatedResponse({ type: Booking })
+  @ApiCreatedResponse({ type: BookingView })
   @ApiBadRequestResponse({
     description:
       'seats порожній або елемент без row/seat; місце повторюється; місця немає в залі',
@@ -58,20 +58,22 @@ export class BookingsController {
   @ApiNotFoundResponse({ description: 'Сеанс не знайдено' })
   @ApiConflictResponse({
     description:
-      'Хоча б одне місце вже заброньоване; жодне місце не бронюється',
+      'Хоча б одне місце вже заброньоване; транзакція відкочується, жодне місце не бронюється',
   })
-  create(
+  async create(
     @Param('id', ParseUUIDPipe) showingId: string,
     @Body() dto: CreateBookingDto,
-  ): Booking {
+  ): Promise<BookingView> {
     return this.bookingsService.create(showingId, dto);
   }
 
   @Get('showings/:id/bookings')
-  @ApiOkResponse({ type: [Booking] })
+  @ApiOkResponse({ type: [BookingView] })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Сеанс не знайдено' })
-  findByShowing(@Param('id', ParseUUIDPipe) showingId: string): Booking[] {
+  async findByShowing(
+    @Param('id', ParseUUIDPipe) showingId: string,
+  ): Promise<BookingView[]> {
     return this.bookingsService.findByShowing(showingId);
   }
 
@@ -82,7 +84,9 @@ export class BookingsController {
   })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Сеанс не знайдено' })
-  getSeats(@Param('id', ParseUUIDPipe) showingId: string): SeatAvailability[] {
+  async getSeats(
+    @Param('id', ParseUUIDPipe) showingId: string,
+  ): Promise<SeatAvailability[]> {
     return this.bookingsService.getSeatsForShowing(showingId);
   }
 }

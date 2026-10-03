@@ -34,13 +34,13 @@ export class FilmsController {
   @ApiBadRequestResponse({
     description: 'Поле відсутнє або має неправильний тип',
   })
-  create(@Body() dto: CreateFilmDto): Film {
+  async create(@Body() dto: CreateFilmDto): Promise<Film> {
     return this.filmsService.create(dto);
   }
 
   @Get()
   @ApiOkResponse({ type: [Film] })
-  findAll(): Film[] {
+  async findAll(): Promise<Film[]> {
     return this.filmsService.findAll();
   }
 
@@ -48,7 +48,7 @@ export class FilmsController {
   @ApiOkResponse({ type: Film })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
   @ApiNotFoundResponse({ description: 'Фільм не знайдено' })
-  findOne(@Param('id', ParseUUIDPipe) id: string): Film {
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<Film> {
     return this.filmsService.findOne(id);
   }
 
@@ -58,10 +58,10 @@ export class FilmsController {
     description: 'Неправильний тип поля або id не є UUID',
   })
   @ApiNotFoundResponse({ description: 'Фільм не знайдено' })
-  update(
+  async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateFilmDto,
-  ): Film {
+  ): Promise<Film> {
     return this.filmsService.update(id, dto);
   }
 
@@ -73,7 +73,7 @@ export class FilmsController {
   @ApiConflictResponse({
     description: 'На фільм посилається хоча б один сеанс',
   })
-  remove(@Param('id', ParseUUIDPipe) id: string): void {
-    this.filmsService.remove(id);
+  async remove(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    await this.filmsService.remove(id);
   }
 }

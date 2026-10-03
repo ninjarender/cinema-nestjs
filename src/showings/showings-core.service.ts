@@ -1,8 +1,10 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { FindOptionsRelations, Repository } from 'typeorm';
 import { Showing } from './entities/showing.entity.js';
 
 /**
- * Сховище сеансів без жодних залежностей.
+ * Доступ до сеансів, потрібний іншим модулям.
  *
  * Його імпортують і модуль сеансів, і модулі фільмів та залів (перевірка перед
  * видаленням), і модуль бронювань. Так зустрічна залежність films ↔ showings
@@ -11,31 +13,32 @@ import { Showing } from './entities/showing.entity.js';
 @Injectable()
 export class ShowingsCoreService {
   private readonly logger = new Logger(ShowingsCoreService.name);
-  private readonly showings: Showing[] = [];
 
-  add(showing: Showing): Showing {
-    this.showings.push(showing);
-    return showing;
-  }
+  constructor(
+    @InjectRepository(Showing)
+    private readonly showingsRepository: Repository<Showing>,
+  ) {}
 
-  findAll(): Showing[] {
-    return this.showings;
-  }
-
-  findOne(id: string): Showing {
-    const showing = this.showings.find((showing) => showing.id === id);
-    if (!showing) {
+  async findOne(
+    id: string,
+    relations?: FindOptionsRelations<Showing>,
+  ): Promise<Showing> {
+    const showing = await this.showingsRepository.findOne({
+      where: { id },
+      relations,
+    });
+    if (showing === null) {
       this.logger.warn(`Сеанс з id ${id} не знайдено`);
       throw new NotFoundException(`Сеанс з id ${id} не знайдено`);
     }
     return showing;
   }
 
-  hasShowingsForFilm(filmId: string): boolean {
-    return this.showings.some((showing) => showing.filmId === filmId);
+  async hasShowingsForFilm(filmId: string): Promise<boolean> {
+    return this.showingsRepository.existsBy({ filmId });
   }
 
-  hasShowingsForHall(hallId: string): boolean {
-    return this.showings.some((showing) => showing.hallId === hallId);
+  async hasShowingsForHall(hallId: string): Promise<boolean> {
+    return this.showingsRepository.existsBy({ hallId });
   }
 }

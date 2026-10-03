@@ -1,5 +1,18 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsISO8601, IsOptional, IsString, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsIn,
+  IsISO8601,
+  IsInt,
+  IsOptional,
+  IsUUID,
+  Matches,
+  Max,
+  Min,
+} from 'class-validator';
+
+export const SORT_ORDERS = ['asc', 'desc'] as const;
+export type SortOrder = (typeof SORT_ORDERS)[number];
 
 export class FindShowingsQueryDto {
   @ApiPropertyOptional({
@@ -7,7 +20,7 @@ export class FindShowingsQueryDto {
     description: 'Залишає сеанси лише цього фільму',
   })
   @IsOptional()
-  @IsString()
+  @IsUUID()
   filmId?: string;
 
   @ApiPropertyOptional({
@@ -24,4 +37,37 @@ export class FindShowingsQueryDto {
     { message: 'date must be a valid calendar date' },
   )
   date?: string;
+
+  @ApiPropertyOptional({
+    description: 'Номер сторінки',
+    minimum: 1,
+    default: 1,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page: number = 1;
+
+  @ApiPropertyOptional({
+    description: 'Розмір сторінки',
+    minimum: 1,
+    maximum: 100,
+    default: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100) // стеля, інакше limit=100000 = вся таблиця
+  limit: number = 20;
+
+  @ApiPropertyOptional({
+    enum: SORT_ORDERS,
+    default: 'asc',
+    description: 'Порядок за часом початку; при рівному часі — за id',
+  })
+  @IsOptional()
+  @IsIn(SORT_ORDERS)
+  sort: SortOrder = 'asc';
 }
