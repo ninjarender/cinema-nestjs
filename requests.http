@@ -1,9 +1,22 @@
 ### Cinema API — перевірка всіх маршрутів і помилок.
 ### Виконуйте запити по черзі згори вниз (розширення REST Client для VS Code).
-### Ідентифікатори підставляються з відповідей попередніх запитів через змінні.
+### Ідентифікатори й токени підставляються з відповідей попередніх запитів через змінні.
+### Перед запуском: міграції + `npm run seed` (створює адміністратора з ADMIN_EMAIL / ADMIN_PASSWORD).
 
 @baseUrl = http://localhost:3000
 @missingId = 00000000-0000-4000-8000-000000000000
+
+# Мають збігатися з ADMIN_EMAIL і ADMIN_PASSWORD у .env
+@adminEmail = admin@cinema.local
+@adminPassword = admin-password-123
+
+@userEmail = {{registerUser.response.body.$.email}}
+@adminToken = {{loginAdmin.response.body.$.accessToken}}
+@userToken = {{loginUser.response.body.$.accessToken}}
+@userRefreshToken = {{loginUser.response.body.$.refreshToken}}
+@rotatedRefreshToken = {{refreshUser.response.body.$.refreshToken}}
+@otherToken = {{loginOther.response.body.$.accessToken}}
+@otherRefreshToken = {{loginOther.response.body.$.refreshToken}}
 
 @filmId = {{createFilm.response.body.$.id}}
 @otherFilmId = {{createOtherFilm.response.body.$.id}}
@@ -12,6 +25,156 @@
 @otherHallId = {{createOtherHall.response.body.$.id}}
 @showingId = {{createShowing.response.body.$.id}}
 @bookingId = {{createBooking.response.body.$.id}}
+@otherBookingId = {{createOtherBooking.response.body.$.id}}
+
+
+######################## АВТЕНТИФІКАЦІЯ ########################
+
+### Реєстрація → 201, роль user (передана role ігнорується), без пароля та хеша
+### (випадкова пошта — щоб файл можна було проганяти повторно)
+# @name registerUser
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "olena{{$randomInt 100000 999999}}@example.com",
+  "password": "olena-password",
+  "role": "admin"
+}
+
+### Реєстрація другого користувача (для перевірки чужих бронювань і токенів) → 201
+# @name registerOther
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "taras{{$randomInt 100000 999999}}@example.com",
+  "password": "taras-password"
+}
+
+### Помилка: пошта вже існує → 409
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "another-password"
+}
+
+### Помилка: неправильний формат пошти → 400
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "not-an-email",
+  "password": "long-enough-password"
+}
+
+### Помилка: пароль коротший за 8 символів → 400
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{
+  "email": "short{{$randomInt 100000 999999}}@example.com",
+  "password": "1234567"
+}
+
+### Вхід адміністратора (створений `npm run seed`) → 200, { accessToken, refreshToken }
+# @name loginAdmin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{adminPassword}}"
+}
+
+### Вхід користувача → 200
+# @name loginUser
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "olena-password"
+}
+
+### Вхід другого користувача → 200
+# @name loginOther
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{registerOther.response.body.$.email}}",
+  "password": "taras-password"
+}
+
+### Помилка: пошти не існує → 401 (повідомлення таке саме, як для неправильного пароля)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "nobody@example.com",
+  "password": "olena-password"
+}
+
+### Помилка: неправильний пароль → 401 (те саме повідомлення)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "wrong-password"
+}
+
+### Поточний користувач → 200, { id, email, role }
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{userToken}}
+
+### Помилка: без заголовка Authorization → 401
+GET {{baseUrl}}/auth/me
+
+### Помилка: зіпсований формат заголовка (без Bearer) → 401
+GET {{baseUrl}}/auth/me
+Authorization: {{userToken}}
+
+### Помилка: недійсний підпис (токен змінено) → 401
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{userToken}}x
+
+# Прострочений access-токен → теж 401 («Токен недійсний або застарілий»). Статично його не записати:
+# постав ACCESS_TOKEN_TTL_MINUTES=1, перезапусти застосунок, увійди й повтори GET /auth/me за хвилину.
+
+### Оновлення пари → 200, новий accessToken і новий refreshToken
+# @name refreshUser
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{userRefreshToken}}"
+}
+
+### Помилка: старий refresh-токен уже використаний → 401
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{userRefreshToken}}"
+}
+
+### Помилка: refresh-токена немає в базі → 401
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "never-issued-token"
+}
+
+### Помилка: refreshToken відсутній у тілі → 400
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{}
 
 
 ######################## ФІЛЬМИ ########################
@@ -19,6 +182,7 @@
 ### Створити фільм → 201
 # @name createFilm
 POST {{baseUrl}}/films
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -30,6 +194,7 @@ Content-Type: application/json
 ### Створити другий фільм (без сеансів, для успішного видалення) → 201
 # @name createOtherFilm
 POST {{baseUrl}}/films
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -38,8 +203,30 @@ Content-Type: application/json
   "releaseYear": 1930
 }
 
+### Помилка: без токена → 401
+POST {{baseUrl}}/films
+Content-Type: application/json
+
+{
+  "title": "Без доступу",
+  "durationMinutes": 90,
+  "releaseYear": 2000
+}
+
+### Помилка: токен з роллю user → 403
+POST {{baseUrl}}/films
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "title": "Без доступу",
+  "durationMinutes": 90,
+  "releaseYear": 2000
+}
+
 ### Помилка: поле відсутнє → 400
 POST {{baseUrl}}/films
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -49,6 +236,7 @@ Content-Type: application/json
 
 ### Помилка: поле має неправильний тип → 400
 POST {{baseUrl}}/films
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -68,14 +256,33 @@ GET {{baseUrl}}/films/{{missingId}}
 
 ### Оновити фільм (часткове оновлення) → 200
 PATCH {{baseUrl}}/films/{{filmId}}
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
   "durationMinutes": 98
 }
 
+### Помилка: без токена → 401
+PATCH {{baseUrl}}/films/{{filmId}}
+Content-Type: application/json
+
+{
+  "durationMinutes": 99
+}
+
+### Помилка: токен з роллю user → 403
+PATCH {{baseUrl}}/films/{{filmId}}
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "durationMinutes": 99
+}
+
 ### Помилка: неправильний тип поля при оновленні → 400
 PATCH {{baseUrl}}/films/{{filmId}}
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -84,6 +291,7 @@ Content-Type: application/json
 
 ### Помилка: оновлення неіснуючого фільму → 404
 PATCH {{baseUrl}}/films/{{missingId}}
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -96,6 +304,7 @@ Content-Type: application/json
 ### Створити зал 3 × 5 → 201 (випадковий номер у назві — щоб файл можна було проганяти повторно)
 # @name createHall
 POST {{baseUrl}}/halls
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -107,6 +316,7 @@ Content-Type: application/json
 ### Створити другий зал (без сеансів, для успішного видалення) → 201
 # @name createOtherHall
 POST {{baseUrl}}/halls
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -115,8 +325,30 @@ Content-Type: application/json
   "seatsPerRow": 4
 }
 
+### Помилка: без токена → 401
+POST {{baseUrl}}/halls
+Content-Type: application/json
+
+{
+  "name": "Зал без доступу",
+  "rows": 1,
+  "seatsPerRow": 1
+}
+
+### Помилка: токен з роллю user → 403
+POST {{baseUrl}}/halls
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "name": "Зал без доступу",
+  "rows": 1,
+  "seatsPerRow": 1
+}
+
 ### Помилка: зал з такою назвою вже існує → 409
 POST {{baseUrl}}/halls
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -127,6 +359,7 @@ Content-Type: application/json
 
 ### Помилка: поле відсутнє → 400
 POST {{baseUrl}}/halls
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -136,6 +369,7 @@ Content-Type: application/json
 
 ### Помилка: число не є цілим додатним → 400
 POST {{baseUrl}}/halls
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -159,6 +393,7 @@ GET {{baseUrl}}/halls/{{missingId}}
 ### Створити сеанс завтра → 201
 # @name createShowing
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -170,6 +405,7 @@ Content-Type: application/json
 
 ### Створити ще один сеанс того самого фільму післязавтра → 201
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -179,8 +415,32 @@ Content-Type: application/json
   "price": 9000
 }
 
+### Помилка: без токена → 401
+POST {{baseUrl}}/showings
+Content-Type: application/json
+
+{
+  "filmId": "{{filmId}}",
+  "hallId": "{{hallId}}",
+  "startsAt": "{{$datetime iso8601 3 d}}",
+  "price": 10000
+}
+
+### Помилка: токен з роллю user → 403
+POST {{baseUrl}}/showings
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "filmId": "{{filmId}}",
+  "hallId": "{{hallId}}",
+  "startsAt": "{{$datetime iso8601 3 d}}",
+  "price": 10000
+}
+
 ### Помилка: фільму з таким id немає → 400
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -192,6 +452,7 @@ Content-Type: application/json
 
 ### Помилка: залу з таким id немає → 400
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -203,6 +464,7 @@ Content-Type: application/json
 
 ### Помилка: startsAt не є коректною датою ISO 8601 → 400
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -214,6 +476,7 @@ Content-Type: application/json
 
 ### Помилка: startsAt у минулому → 400
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -225,6 +488,7 @@ Content-Type: application/json
 
 ### Помилка: price не є цілим додатним числом → 400
 POST {{baseUrl}}/showings
+Authorization: Bearer {{adminToken}}
 Content-Type: application/json
 
 {
@@ -285,21 +549,46 @@ GET {{baseUrl}}/showings/{{missingId}}/seats
 
 ######################## БРОНЮВАННЯ ########################
 
-### Забронювати два місця → 201, totalPrice = 25000
+### Забронювати два місця → 201, totalPrice = 25000; userId — з токена, поле з тіла ігнорується
 # @name createBooking
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
+  "userId": "{{missingId}}",
   "seats": [
     { "row": 1, "seat": 4 },
     { "row": 1, "seat": 5 }
   ]
 }
 
+### Бронювання другого користувача (адміністратор скасує його нижче) → 201
+# @name createOtherBooking
+POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{otherToken}}
+Content-Type: application/json
+
+{
+  "seats": [
+    { "row": 3, "seat": 1 }
+  ]
+}
+
+### Помилка: без токена → 401
+POST {{baseUrl}}/showings/{{showingId}}/bookings
+Content-Type: application/json
+
+{
+  "seats": [
+    { "row": 3, "seat": 2 }
+  ]
+}
+
 ### Помилка: одне з місць уже заброньоване → 409
 ### Транзакція відкочується: ряд 2 місце 1 НЕ бронюється, нового бронювання в БД немає
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -311,6 +600,7 @@ Content-Type: application/json
 
 ### Помилка: порожній масив seats → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -319,6 +609,7 @@ Content-Type: application/json
 
 ### Помилка: елемент не містить обох чисел → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -329,6 +620,7 @@ Content-Type: application/json
 
 ### Помилка: одне й те саме місце в масиві двічі → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -340,6 +632,7 @@ Content-Type: application/json
 
 ### Помилка: номер ряду перевищує rows → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -350,6 +643,7 @@ Content-Type: application/json
 
 ### Помилка: номер місця перевищує seatsPerRow → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -360,6 +654,7 @@ Content-Type: application/json
 
 ### Помилка: число не є цілим додатним → 400
 POST {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -370,6 +665,7 @@ Content-Type: application/json
 
 ### Помилка: бронювання на неіснуючий сеанс → 404
 POST {{baseUrl}}/showings/{{missingId}}/bookings
+Authorization: Bearer {{userToken}}
 Content-Type: application/json
 
 {
@@ -383,39 +679,147 @@ GET {{baseUrl}}/showings/{{showingId}}/seats
 
 ### Бронювання сеансу → 200
 GET {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{adminToken}}
+
+### Помилка: без токена → 401
+GET {{baseUrl}}/showings/{{showingId}}/bookings
+
+### Помилка: токен з роллю user → 403
+GET {{baseUrl}}/showings/{{showingId}}/bookings
+Authorization: Bearer {{userToken}}
 
 ### Помилка: бронювання неіснуючого сеансу → 404
 GET {{baseUrl}}/showings/{{missingId}}/bookings
+Authorization: Bearer {{adminToken}}
 
-### Усі бронювання → 200
+### Усі бронювання (адміністратор) → 200
 GET {{baseUrl}}/bookings
+Authorization: Bearer {{adminToken}}
+
+### Помилка: без токена → 401
+GET {{baseUrl}}/bookings
+
+### Помилка: токен з роллю user → 403
+GET {{baseUrl}}/bookings
+Authorization: Bearer {{userToken}}
+
+### Мої бронювання з даними сеансу → 200
+GET {{baseUrl}}/bookings/my
+Authorization: Bearer {{userToken}}
+
+### Мої бронювання другого користувача: чужих не видно → 200
+GET {{baseUrl}}/bookings/my
+Authorization: Bearer {{otherToken}}
+
+### Помилка: без токена → 401
+GET {{baseUrl}}/bookings/my
+
 
 
 ######################## ВИДАЛЕННЯ ########################
 
 ### Помилка: на фільм посилається сеанс → 409
 DELETE {{baseUrl}}/films/{{filmId}}
+Authorization: Bearer {{adminToken}}
 
 ### Помилка: на зал посилається сеанс → 409
 DELETE {{baseUrl}}/halls/{{hallId}}
+Authorization: Bearer {{adminToken}}
+
+### Помилка: без токена → 401
+DELETE {{baseUrl}}/films/{{otherFilmId}}
+
+### Помилка: токен з роллю user → 403
+DELETE {{baseUrl}}/films/{{otherFilmId}}
+Authorization: Bearer {{userToken}}
 
 ### Видалити фільм без сеансів → 204
 DELETE {{baseUrl}}/films/{{otherFilmId}}
+Authorization: Bearer {{adminToken}}
 
 ### Помилка: фільм уже видалено → 404
 DELETE {{baseUrl}}/films/{{otherFilmId}}
+Authorization: Bearer {{adminToken}}
+
+### Помилка: без токена → 401
+DELETE {{baseUrl}}/halls/{{otherHallId}}
+
+### Помилка: токен з роллю user → 403
+DELETE {{baseUrl}}/halls/{{otherHallId}}
+Authorization: Bearer {{userToken}}
 
 ### Видалити зал без сеансів → 204
 DELETE {{baseUrl}}/halls/{{otherHallId}}
+Authorization: Bearer {{adminToken}}
 
 ### Помилка: зал уже видалено → 404
 DELETE {{baseUrl}}/halls/{{otherHallId}}
+Authorization: Bearer {{adminToken}}
 
-### Скасувати бронювання → 204
+### Помилка: без токена → 401
 DELETE {{baseUrl}}/bookings/{{bookingId}}
+
+### Помилка: чуже бронювання (другий користувач) → 403
+DELETE {{baseUrl}}/bookings/{{bookingId}}
+Authorization: Bearer {{otherToken}}
+
+### Скасувати своє бронювання → 204
+DELETE {{baseUrl}}/bookings/{{bookingId}}
+Authorization: Bearer {{userToken}}
 
 ### Помилка: бронювання вже скасоване → 404
 DELETE {{baseUrl}}/bookings/{{bookingId}}
+Authorization: Bearer {{userToken}}
 
-### Після скасування ряд 1 місця 4 і 5 знову вільні → 200
+### Адміністратор скасовує чуже бронювання → 204
+DELETE {{baseUrl}}/bookings/{{otherBookingId}}
+Authorization: Bearer {{adminToken}}
+
+### Після скасування ряд 1 місця 4–5 і ряд 3 місце 1 знову вільні → 200
 GET {{baseUrl}}/showings/{{showingId}}/seats
+
+
+######################## ВИХІД ########################
+
+### Помилка: вихід без access-токена → 401
+POST {{baseUrl}}/auth/logout
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}
+
+### Помилка: refresh-токен належить іншому користувачу → 404 (і він лишається дійсним)
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "refreshToken": "{{otherRefreshToken}}"
+}
+
+### Вихід: відкликати власний refresh-токен → 204
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}
+
+### Помилка: токен уже відкликано → 404
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}
+
+### Помилка: відкликаний refresh-токен більше не оновлює пару → 401
+POST {{baseUrl}}/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{rotatedRefreshToken}}"
+}

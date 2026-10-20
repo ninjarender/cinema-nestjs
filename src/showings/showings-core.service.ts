@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsRelations, Repository } from 'typeorm';
+import { ShowingView } from './dto/showing-view.dto.js';
 import { Showing } from './entities/showing.entity.js';
 
 /**
@@ -32,6 +33,17 @@ export class ShowingsCoreService {
       throw new NotFoundException(`Сеанс з id ${id} не знайдено`);
     }
     return showing;
+  }
+
+  /** Сеанс у відповідях на читання. Очікує сеанс із завантаженими film і hall. */
+  toView(showing: Showing): ShowingView {
+    return {
+      id: showing.id,
+      filmTitle: showing.film!.title,
+      hallName: showing.hall!.name,
+      startsAt: showing.startsAt,
+      price: showing.price,
+    };
   }
 
   async hasShowingsForFilm(filmId: string): Promise<boolean> {

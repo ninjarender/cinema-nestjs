@@ -1,4 +1,5 @@
 import { fakerUK as faker } from '@faker-js/faker';
+import bcrypt from 'bcryptjs';
 import {
   DataSource,
   EntityManager,
@@ -7,10 +8,13 @@ import {
 } from 'typeorm';
 import { BookingSeat } from './bookings/entities/booking-seat.entity.js';
 import { Booking } from './bookings/entities/booking.entity.js';
+import { validate } from './config/environment-variables.js';
 import dataSource from './data-source.js';
 import { Film } from './films/entities/film.entity.js';
 import { Hall } from './halls/entities/hall.entity.js';
 import { Showing } from './showings/entities/showing.entity.js';
+import { User } from './users/entities/user.entity.js';
+import { UserRole } from './users/user-role.enum.js';
 
 /**
  * Засівання БД: `npm run seed` (після `npm run migration:run`).
@@ -19,6 +23,9 @@ import { Showing } from './showings/entities/showing.entity.js';
  * з тими самими id. Вставка йде через INSERT … ON CONFLICT DO NOTHING,
  * тому повторний запуск нічого не дублює.
  * ⚠️ Версія @faker-js/faker закріплена точно: інша версія з тим самим seed дає інші дані.
+ *
+ * Перший адміністратор береться зі змінних ADMIN_EMAIL і ADMIN_PASSWORD (валідація
+ * та сама, що й у застосунку). Засіяні бронювання належать йому.
  */
 
 const FAKER_SEED = 20261125;
@@ -31,6 +38,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const START_HOURS = [10, 13, 16, 19, 21];
 
 faker.seed(FAKER_SEED);
+
+// Той самий клас валідації, що й у ConfigModule: без ADMIN_* seed не запуститься
+const env = validate(process.env);
 
 /** Сеанс через `days` діб від сьогодні о годині `hour` UTC — завжди в майбутньому. */
 function daysFromNow(days: number, hour: number): Date {
@@ -65,7 +75,7 @@ const showings: Showing[] = Array.from({ length: SHOWINGS_COUNT }, (_, i) => ({
   price: faker.number.int({ min: 80, max: 250 }) * 100, // у копійках
 }));
 
-const bookings: Booking[] = [];
+const bookings: Omit<Booking, 'userId'>[] = []; // власник — адміністратор, id відомий лише після вставки
 const bookingSeats: Partial<BookingSeat>[] = [];
 const takenSeats = new Set<string>(); // одне місце на сеансі — один раз
 
@@ -92,7 +102,7 @@ for (let i = 0; i < BOOKINGS_COUNT; i++) {
     id: bookingId,
     showingId: showing.id,
     totalPrice: showing.price * freeSeats.length,
-  } as Booking);
+  } as Omit<Booking, 'userId'>);
   bookingSeats.push(
     ...freeSeats.map(({ row, seat }) => ({
       id: faker.string.uuid(),
@@ -121,17 +131,48 @@ async function insertMissing<T extends ObjectLiteral>(
   return (result.raw as unknown[]).length;
 }
 
+/**
+ * Створює адміністратора; якщо користувач з цією поштою вже є — робить його admin
+ * і ставить пароль з ADMIN_PASSWORD (INSERT … ON CONFLICT (email) DO UPDATE).
+ * Так обліковий запис, зареєстрований кимось на цю пошту, не стає адміністратором зі своїм паролем.
+ * Повертає id адміністратора.
+ */
+async function upsertAdmin(manager: EntityManager): Promise<string> {
+  const passwordHash = await bcrypt.hash(env.ADMIN_PASSWORD, 10);
+  const result = await manager
+    .createQueryBuilder()
+    .insert()
+    .into(User)
+    .values({
+      email: env.ADMIN_EMAIL.trim().toLowerCase(), // як RegisterDto / LoginDto
+      passwordHash,
+      role: UserRole.Admin,
+    })
+    .orUpdate(['role', 'password_hash'], ['email'])
+    .returning('id')
+    .execute();
+  return (result.raw as { id: string }[])[0].id;
+}
+
 async function seed(source: DataSource): Promise<void> {
   await source.initialize();
   try {
     // Одна транзакція: або засіяно все, або нічого
-    const inserted = await source.transaction(async (manager) => ({
-      films: await insertMissing(manager, Film, films),
-      halls: await insertMissing(manager, Hall, halls),
-      showings: await insertMissing(manager, Showing, showings),
-      bookings: await insertMissing(manager, Booking, bookings),
-      bookingSeats: await insertMissing(manager, BookingSeat, bookingSeats),
-    }));
+    const inserted = await source.transaction(async (manager) => {
+      const adminId = await upsertAdmin(manager);
+      return {
+        films: await insertMissing(manager, Film, films),
+        halls: await insertMissing(manager, Hall, halls),
+        showings: await insertMissing(manager, Showing, showings),
+        bookings: await insertMissing(
+          manager,
+          Booking,
+          bookings.map((booking) => ({ ...booking, userId: adminId })),
+        ),
+        bookingSeats: await insertMissing(manager, BookingSeat, bookingSeats),
+      };
+    });
+    console.log(`Адміністратор: ${env.ADMIN_EMAIL}`); // пошта, але не пароль
     console.log('Seed завершено, додано рядків:', inserted);
   } finally {
     await source.destroy();

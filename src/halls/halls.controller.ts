@@ -11,13 +11,19 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Public } from '../common/decorators/public.decorator.js';
+import { Roles } from '../common/decorators/roles.decorator.js';
+import { UserRole } from '../users/user-role.enum.js';
 import { CreateHallDto } from './dto/create-hall.dto.js';
 import { HallWithSeats } from './dto/hall-with-seats.dto.js';
 import { Hall } from './entities/hall.entity.js';
@@ -29,6 +35,14 @@ export class HallsController {
   constructor(private readonly hallsService: HallsService) {}
 
   @Post()
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @ApiCreatedResponse({ type: Hall })
   @ApiBadRequestResponse({
     description:
@@ -39,12 +53,14 @@ export class HallsController {
     return this.hallsService.create(dto);
   }
 
+  @Public()
   @Get()
   @ApiOkResponse({ type: [Hall] })
   async findAll(): Promise<Hall[]> {
     return this.hallsService.findAll();
   }
 
+  @Public()
   @Get(':id')
   @ApiOkResponse({ type: HallWithSeats })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
@@ -56,6 +72,14 @@ export class HallsController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiNoContentResponse({ description: 'Зал видалено' })
   @ApiBadRequestResponse({ description: 'id не є UUID' })

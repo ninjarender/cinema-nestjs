@@ -9,11 +9,17 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Public } from '../common/decorators/public.decorator.js';
+import { Roles } from '../common/decorators/roles.decorator.js';
+import { UserRole } from '../users/user-role.enum.js';
 import { CreateShowingDto } from './dto/create-showing.dto.js';
 import { FindShowingsQueryDto } from './dto/find-showings-query.dto.js';
 import { PaginatedShowingsDto } from './dto/paginated-showings.dto.js';
@@ -27,6 +33,14 @@ export class ShowingsController {
   constructor(private readonly showingsService: ShowingsService) {}
 
   @Post()
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @ApiCreatedResponse({ type: Showing })
   @ApiBadRequestResponse({
     description:
@@ -36,6 +50,7 @@ export class ShowingsController {
     return this.showingsService.create(dto);
   }
 
+  @Public()
   @Get()
   @ApiOkResponse({
     type: PaginatedShowingsDto,
@@ -52,6 +67,7 @@ export class ShowingsController {
     return this.showingsService.findAll(query);
   }
 
+  @Public()
   @Get(':id')
   @ApiOkResponse({ type: ShowingView })
   @ApiBadRequestResponse({ description: 'id не є UUID' })

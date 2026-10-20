@@ -12,13 +12,19 @@ import {
 } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
+  ApiBearerAuth,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiTags,
+  ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Public } from '../common/decorators/public.decorator.js';
+import { Roles } from '../common/decorators/roles.decorator.js';
+import { UserRole } from '../users/user-role.enum.js';
 import { CreateFilmDto } from './dto/create-film.dto.js';
 import { UpdateFilmDto } from './dto/update-film.dto.js';
 import { Film } from './entities/film.entity.js';
@@ -30,6 +36,14 @@ export class FilmsController {
   constructor(private readonly filmsService: FilmsService) {}
 
   @Post()
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @ApiCreatedResponse({ type: Film })
   @ApiBadRequestResponse({
     description: 'Поле відсутнє або має неправильний тип',
@@ -38,12 +52,14 @@ export class FilmsController {
     return this.filmsService.create(dto);
   }
 
+  @Public()
   @Get()
   @ApiOkResponse({ type: [Film] })
   async findAll(): Promise<Film[]> {
     return this.filmsService.findAll();
   }
 
+  @Public()
   @Get(':id')
   @ApiOkResponse({ type: Film })
   @ApiBadRequestResponse({ description: 'id не є UUID' })
@@ -53,6 +69,14 @@ export class FilmsController {
   }
 
   @Patch(':id')
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @ApiOkResponse({ type: Film })
   @ApiBadRequestResponse({
     description: 'Неправильний тип поля або id не є UUID',
@@ -66,6 +90,14 @@ export class FilmsController {
   }
 
   @Delete(':id')
+  @Roles(UserRole.Admin)
+  @ApiBearerAuth()
+  @ApiUnauthorizedResponse({
+    description: 'Access-токен відсутній або недійсний',
+  })
+  @ApiForbiddenResponse({
+    description: 'Недостатньо прав (потрібна роль admin)',
+  })
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiNoContentResponse({ description: 'Фільм видалено' })
   @ApiBadRequestResponse({ description: 'id не є UUID' })

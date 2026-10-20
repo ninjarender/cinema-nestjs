@@ -11,10 +11,13 @@ async function bootstrap() {
     .setTitle('Cinema API')
     .setDescription('Розклад сеансів кінотеатру та бронювання місць')
     .setVersion('1.0')
+    .addBearerAuth() // кнопка Authorize; захищені маршрути позначені @ApiBearerAuth()
     .build();
   const documentFactory = () =>
     SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('docs', app, documentFactory);
+  SwaggerModule.setup('docs', app, documentFactory, {
+    swaggerOptions: { persistAuthorization: true }, // токен переживе перезавантаження
+  });
 
   const config = app.get(ConfigService<EnvironmentVariables, true>);
   await app.listen(config.get('PORT', { infer: true }));

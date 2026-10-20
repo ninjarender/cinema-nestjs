@@ -1,17 +1,24 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface.js';
 import { isUniqueViolation } from '../common/database-errors.js';
 import { Seat } from '../halls/dto/hall-with-seats.dto.js';
 import { HallsService } from '../halls/halls.service.js';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
-import { BookingView, SeatAvailability } from './dto/booking-view.dto.js';
+import { UserRole } from '../users/user-role.enum.js';
+import {
+  BookingView,
+  MyBookingView,
+  SeatAvailability,
+} from './dto/booking-view.dto.js';
 import { CreateBookingDto } from './dto/create-booking.dto.js';
 import { BookingSeat } from './entities/booking-seat.entity.js';
 import { Booking } from './entities/booking.entity.js';
@@ -51,7 +58,25 @@ export class BookingsService {
     return bookings.map((booking) => this.toView(booking));
   }
 
-  async create(showingId: string, dto: CreateBookingDto): Promise<BookingView> {
+  /** Бронювання користувача з даними сеансу, у порядку початку сеансу. */
+  async findMine(userId: string): Promise<MyBookingView[]> {
+    const bookings = await this.bookingsRepository.find({
+      where: { userId },
+      relations: { seats: true, showing: { film: true, hall: true } },
+      order: { showing: { startsAt: 'ASC' }, createdAt: 'ASC', id: 'ASC' },
+    });
+    return bookings.map((booking) => ({
+      ...this.toView(booking),
+      showing: this.showingsCore.toView(booking.showing!),
+    }));
+  }
+
+  /** userId — лише з токена: у CreateBookingDto такого поля немає. */
+  async create(
+    showingId: string,
+    dto: CreateBookingDto,
+    userId: string,
+  ): Promise<BookingView> {
     const showing = await this.showingsCore.findOne(showingId, { hall: true });
     const hall = showing.hall!;
 
@@ -70,6 +95,7 @@ export class BookingsService {
       const booking = await this.dataSource.transaction(async (manager) => {
         const booking = manager.create(Booking, {
           showingId,
+          userId,
           totalPrice: showing.price * dto.seats.length,
         });
         await manager.save(booking); // id генерує БД — тому місця ПІСЛЯ save
@@ -107,13 +133,24 @@ export class BookingsService {
     }));
   }
 
-  async remove(id: string): Promise<void> {
-    // Місця видаляє сама БД: ON DELETE CASCADE на booking_seats.booking_id
-    const result = await this.bookingsRepository.delete({ id });
-    if (result.affected === 0) {
+  /**
+   * Власника перевіряє сервіс, а не guard: для цього потрібен запит до БД.
+   * Спершу шукаємо, потім порівнюємо — так чуже (403) відрізняється від неіснуючого (404).
+   */
+  async remove(id: string, user: JwtPayload): Promise<void> {
+    const booking = await this.bookingsRepository.findOneBy({ id });
+    if (booking === null) {
       this.logger.warn(`Бронювання з id ${id} не знайдено`);
       throw new NotFoundException(`Бронювання з id ${id} не знайдено`);
     }
+    if (user.role !== UserRole.Admin && booking.userId !== user.sub) {
+      this.logger.warn(
+        `Користувач ${user.sub} намагався скасувати чуже бронювання ${id}`,
+      );
+      throw new ForbiddenException('Бронювання належить іншому користувачу');
+    }
+    // Місця видаляє сама БД: ON DELETE CASCADE на booking_seats.booking_id
+    await this.bookingsRepository.delete({ id });
   }
 
   /** 409 зі списком зайнятих місць — без тексту помилки БД. */
@@ -146,6 +183,7 @@ export class BookingsService {
     return {
       id: booking.id,
       showingId: booking.showingId,
+      userId: booking.userId,
       seats,
       totalPrice: booking.totalPrice,
       createdAt: booking.createdAt,
