@@ -1,11 +1,13 @@
 import 'dotenv/config'; // .env → process.env ще до створення DataSource
 import { fileURLToPath } from 'node:url';
 import { DataSource } from 'typeorm';
+import { RefreshToken } from './auth/entities/refresh-token.entity.js';
 import { BookingSeat } from './bookings/entities/booking-seat.entity.js';
 import { Booking } from './bookings/entities/booking.entity.js';
 import { Film } from './films/entities/film.entity.js';
 import { Hall } from './halls/entities/hall.entity.js';
 import { Showing } from './showings/entities/showing.entity.js';
+import { User } from './users/entities/user.entity.js';
 
 /**
  * DataSource для CLI TypeORM і seed-скрипта: вони працюють поза NestJS,
@@ -22,6 +24,6 @@ export default new DataSource({
   username: process.env.POSTGRES_USER,
   password: process.env.POSTGRES_PASSWORD,
   database: process.env.POSTGRES_DB,
-  entities: [Film, Hall, Showing, Booking, BookingSeat], // явно: autoLoadEntities — фіча NestJS
+  entities: [Film, Hall, Showing, Booking, BookingSeat, User, RefreshToken], // явно: autoLoadEntities — фіча NestJS
   migrations: [fileURLToPath(new URL('./migrations/*.js', import.meta.url))],
 });

@@ -3,6 +3,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinColumn,
   ManyToOne,
   OneToMany,
@@ -10,6 +11,7 @@ import {
   type Relation,
 } from 'typeorm';
 import { Showing } from '../../showings/entities/showing.entity.js';
+import { User } from '../../users/entities/user.entity.js';
 import { BookingSeat } from './booking-seat.entity.js';
 
 @Entity('bookings')
@@ -21,6 +23,12 @@ export class Booking {
   @ApiProperty({ example: '7d1f9a3c-8e2b-4f6a-b1d4-3c5e7a9f0b2d' })
   @Column({ name: 'showing_id', type: 'uuid' })
   showingId: string;
+
+  // Колонка власника: перевірка «своє чи чуже» без завантаження User
+  @ApiProperty({ example: 'f2b1c9e4-3a7d-4e8b-9c1f-5d6a7b8c9d0e' })
+  @Index() // GET /bookings/my фільтрує за власником
+  @Column({ name: 'user_id', type: 'uuid' })
+  userId: string;
 
   @ApiProperty({
     example: 25000,
@@ -36,6 +44,10 @@ export class Booking {
   @ManyToOne(() => Showing, (showing) => showing.bookings, { nullable: false })
   @JoinColumn({ name: 'showing_id' })
   showing?: Relation<Showing>;
+
+  @ManyToOne(() => User, { nullable: false })
+  @JoinColumn({ name: 'user_id' })
+  user?: Relation<User>;
 
   @OneToMany(() => BookingSeat, (seat) => seat.booking)
   seats?: BookingSeat[];

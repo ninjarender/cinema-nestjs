@@ -1,16 +1,14 @@
 /// <reference types="vite/client" />
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import 'dotenv/config';
+import bcrypt from 'bcryptjs';
 import { Client } from 'pg';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module.js';
 
-// e2e працює з окремою базою, щоб не чіпати дані розробки.
-// ConfigModule не перезаписує змінні, які вже є в process.env.
-process.env.POSTGRES_DB = `${process.env.POSTGRES_DB}_test`;
+// POSTGRES_DB уже замінено на <db>_test у test/setup-e2e.ts
 
 // Класи міграцій напряму з src/ (CLI бере їх із dist/)
 const migrations = Object.values(
@@ -57,9 +55,32 @@ async function prepareTestDatabase() {
   await migrator.destroy();
 }
 
+const ADMIN = { email: 'admin@cinema.test', password: 'admin-password' };
+const USER = { email: 'olena@cinema.test', password: 'olena-password' };
+const OTHER = { email: 'taras@cinema.test', password: 'taras-password' };
+
 describe('Cinema API (e2e)', () => {
   let app: INestApplication<App>;
   let http: ReturnType<typeof request>;
+  let adminToken: string;
+  let userToken: string;
+
+  const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
+  const asAdmin = () => bearer(adminToken);
+  const asUser = () => bearer(userToken);
+
+  async function login(credentials: { email: string; password: string }) {
+    const res = await http.post('/auth/login').send(credentials).expect(200);
+    return res.body as { accessToken: string; refreshToken: string };
+  }
+
+  async function registerAndLogin(credentials: {
+    email: string;
+    password: string;
+  }) {
+    await http.post('/auth/register').send(credentials).expect(201);
+    return login(credentials);
+  }
 
   beforeAll(async () => {
     await prepareTestDatabase();
@@ -75,9 +96,18 @@ describe('Cinema API (e2e)', () => {
     http = request(app.getHttpServer());
 
     // Кожен тест — з чистого аркуша
-    await app
-      .get(DataSource)
-      .query('TRUNCATE booking_seats, bookings, showings, films, halls');
+    const db = app.get(DataSource);
+    await db.query(
+      'TRUNCATE booking_seats, bookings, showings, films, halls, refresh_tokens, users',
+    );
+
+    // Адміністратора через API не створити (роль із тіла ігнорується) — лише напряму в БД, як seed
+    await db.query(
+      `INSERT INTO users (email, password_hash, role) VALUES ($1, $2, 'admin')`,
+      [ADMIN.email, await bcrypt.hash(ADMIN.password, 4)],
+    );
+    adminToken = (await login(ADMIN)).accessToken;
+    userToken = (await registerAndLogin(USER)).accessToken;
   });
 
   afterEach(async () => {
@@ -87,6 +117,7 @@ describe('Cinema API (e2e)', () => {
   async function createFilm(title = 'Тіні забутих предків') {
     const res = await http
       .post('/films')
+      .set(asAdmin())
       .send({ title, durationMinutes: 97, releaseYear: 1965 })
       .expect(201);
     return res.body.id as string;
@@ -95,6 +126,7 @@ describe('Cinema API (e2e)', () => {
   async function createHall(name = 'Зал 1', rows = 3, seatsPerRow = 5) {
     const res = await http
       .post('/halls')
+      .set(asAdmin())
       .send({ name, rows, seatsPerRow })
       .expect(201);
     return res.body.id as string;
@@ -108,6 +140,7 @@ describe('Cinema API (e2e)', () => {
   ) {
     const res = await http
       .post('/showings')
+      .set(asAdmin())
       .send({ filmId, hallId, startsAt, price })
       .expect(201);
     return res.body.id as string;
@@ -120,6 +153,7 @@ describe('Cinema API (e2e)', () => {
       await http.get(`/films/${id}`).expect(200);
       const updated = await http
         .patch(`/films/${id}`)
+        .set(asAdmin())
         .send({ durationMinutes: 98, unknownField: 'stripped' })
         .expect(200);
       expect(updated.body).toEqual({
@@ -129,7 +163,7 @@ describe('Cinema API (e2e)', () => {
         releaseYear: 1965,
       });
 
-      await http.delete(`/films/${id}`).expect(204);
+      await http.delete(`/films/${id}`).set(asAdmin()).expect(204);
       const notFound = await http.get(`/films/${id}`).expect(404);
       // єдиний формат помилки від глобального HttpExceptionFilter
       expect(notFound.body).toEqual({
@@ -143,10 +177,12 @@ describe('Cinema API (e2e)', () => {
     it('rejects a film with a missing or mistyped field', async () => {
       await http
         .post('/films')
+        .set(asAdmin())
         .send({ title: 'X', releaseYear: 2000 })
         .expect(400);
       await http
         .post('/films')
+        .set(asAdmin())
         .send({ title: 'X', durationMinutes: '97', releaseYear: 2000 })
         .expect(400);
     });
@@ -156,8 +192,8 @@ describe('Cinema API (e2e)', () => {
       const hallId = await createHall();
       await createShowing(filmId, hallId);
 
-      await http.delete(`/films/${filmId}`).expect(409);
-      await http.delete(`/halls/${hallId}`).expect(409);
+      await http.delete(`/films/${filmId}`).set(asAdmin()).expect(409);
+      await http.delete(`/halls/${hallId}`).set(asAdmin()).expect(409);
     });
   });
 
@@ -174,6 +210,7 @@ describe('Cinema API (e2e)', () => {
       await createHall('Зал 1');
       await http
         .post('/halls')
+        .set(asAdmin())
         .send({ name: 'Зал 1', rows: 1, seatsPerRow: 1 })
         .expect(409);
     });
@@ -181,6 +218,7 @@ describe('Cinema API (e2e)', () => {
     it('rejects non-positive and non-integer sizes', async () => {
       await http
         .post('/halls')
+        .set(asAdmin())
         .send({ name: 'X', rows: 2.5, seatsPerRow: 0 })
         .expect(400);
     });
@@ -194,22 +232,27 @@ describe('Cinema API (e2e)', () => {
 
       await http
         .post('/showings')
+        .set(asAdmin())
         .send({ ...base, filmId: MISSING_ID })
         .expect(400);
       await http
         .post('/showings')
+        .set(asAdmin())
         .send({ ...base, hallId: MISSING_ID })
         .expect(400);
       await http
         .post('/showings')
+        .set(asAdmin())
         .send({ ...base, startsAt: 'not-a-date' })
         .expect(400);
       await http
         .post('/showings')
+        .set(asAdmin())
         .send({ ...base, startsAt: '2020-01-01T10:00:00Z' })
         .expect(400);
       await http
         .post('/showings')
+        .set(asAdmin())
         .send({ ...base, price: 1.5 })
         .expect(400);
     });
@@ -291,6 +334,7 @@ describe('Cinema API (e2e)', () => {
 
       const booking = await http
         .post(`/showings/${showingId}/bookings`)
+        .set(asUser())
         .send({
           seats: [
             { row: 1, seat: 4 },
@@ -303,6 +347,7 @@ describe('Cinema API (e2e)', () => {
       // одне з місць зайняте → 409 і ряд 2 місце 1 не бронюється
       await http
         .post(`/showings/${showingId}/bookings`)
+        .set(asUser())
         .send({
           seats: [
             { row: 2, seat: 1 },
@@ -317,12 +362,18 @@ describe('Cinema API (e2e)', () => {
         return res.body.filter((s: { isBooked: boolean }) => s.isBooked).length;
       };
       expect(await booked()).toBe(2);
-      const all = await http.get('/bookings').expect(200);
+      const all = await http.get('/bookings').set(asAdmin()).expect(200);
       expect(all.body).toHaveLength(1);
 
-      await http.delete(`/bookings/${booking.body.id}`).expect(204);
+      await http
+        .delete(`/bookings/${booking.body.id}`)
+        .set(asUser())
+        .expect(204);
       expect(await booked()).toBe(0);
-      await http.delete(`/bookings/${booking.body.id}`).expect(404);
+      await http
+        .delete(`/bookings/${booking.body.id}`)
+        .set(asUser())
+        .expect(404);
     });
 
     it('sells a seat only once under concurrent requests', async () => {
@@ -333,6 +384,7 @@ describe('Cinema API (e2e)', () => {
       const book = () =>
         http
           .post(`/showings/${showingId}/bookings`)
+          .set(asUser())
           .send({ seats: [{ row: 2, seat: 2 }] });
 
       const statuses = (await Promise.all([book(), book(), book()]))
@@ -342,6 +394,7 @@ describe('Cinema API (e2e)', () => {
 
       const bookings = await http
         .get(`/showings/${showingId}/bookings`)
+        .set(asAdmin())
         .expect(200);
       expect(bookings.body).toHaveLength(1);
     });
@@ -352,7 +405,10 @@ describe('Cinema API (e2e)', () => {
         await createHall('Зал 1', 3, 5),
       );
       const book = (seats: unknown) =>
-        http.post(`/showings/${showingId}/bookings`).send({ seats });
+        http
+          .post(`/showings/${showingId}/bookings`)
+          .set(asUser())
+          .send({ seats });
 
       await book([]).expect(400);
       await book([{ row: 1 }]).expect(400);
@@ -364,8 +420,247 @@ describe('Cinema API (e2e)', () => {
       await book([{ row: 1, seat: 6 }]).expect(400);
       await http
         .post(`/showings/${MISSING_ID}/bookings`)
+        .set(asUser())
         .send({ seats: [{ row: 1, seat: 1 }] })
         .expect(404);
+    });
+  });
+
+  describe('auth', () => {
+    it('registers without exposing the password hash and ignores the role', async () => {
+      const res = await http
+        .post('/auth/register')
+        .send({ ...OTHER, role: 'admin' })
+        .expect(201);
+
+      expect(res.body).toEqual({
+        id: expect.any(String),
+        email: OTHER.email,
+        role: 'user',
+        createdAt: expect.any(String),
+      });
+      expect(JSON.stringify(res.body)).not.toContain('password');
+
+      await http.post('/auth/register').send(OTHER).expect(409);
+      await http
+        .post('/auth/register')
+        .send({ email: 'not-an-email', password: 'long-enough' })
+        .expect(400);
+      await http
+        .post('/auth/register')
+        .send({ email: 'short@cinema.test', password: '1234567' })
+        .expect(400);
+      // bcrypt бере лише 72 байти: 40 кириличних символів = 80 байтів → 400
+      await http
+        .post('/auth/register')
+        .send({ email: 'long@cinema.test', password: 'п'.repeat(40) })
+        .expect(400);
+    });
+
+    it('returns the same 401 for an unknown email and a wrong password', async () => {
+      const unknown = await http
+        .post('/auth/login')
+        .send({ email: 'nobody@cinema.test', password: USER.password })
+        .expect(401);
+      const wrong = await http
+        .post('/auth/login')
+        .send({ email: USER.email, password: 'wrong-password' })
+        .expect(401);
+      expect(unknown.body.message).toBe(wrong.body.message);
+    });
+
+    it('returns the current user', async () => {
+      const res = await http.get('/auth/me').set(asUser()).expect(200);
+      expect(res.body).toEqual({
+        id: expect.any(String),
+        email: USER.email,
+        role: 'user',
+      });
+    });
+
+    it('rejects a missing, malformed or forged access token', async () => {
+      await http.get('/auth/me').expect(401);
+      await http.get('/auth/me').set('Authorization', adminToken).expect(401);
+      await http
+        .get('/auth/me')
+        .set('Authorization', 'Bearer not.a.jwt')
+        .expect(401);
+      const [header, , signature] = adminToken.split('.');
+      const forgedPayload = Buffer.from(
+        JSON.stringify({ sub: MISSING_ID, role: 'admin' }),
+      ).toString('base64url');
+      await http
+        .get('/auth/me')
+        .set(bearer(`${header}.${forgedPayload}.${signature}`))
+        .expect(401);
+    });
+
+    it('rotates the refresh token: the old one stops working', async () => {
+      const first = await login(USER);
+
+      const res = await http
+        .post('/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(200);
+      expect(res.body.refreshToken).not.toBe(first.refreshToken);
+      await http.get('/auth/me').set(bearer(res.body.accessToken)).expect(200);
+
+      await http
+        .post('/auth/refresh')
+        .send({ refreshToken: first.refreshToken })
+        .expect(401);
+      await http
+        .post('/auth/refresh')
+        .send({ refreshToken: 'never-issued' })
+        .expect(401);
+
+      // у БД лише SHA-256-хеш, не сам токен
+      const rows: { token_hash: string }[] = await app
+        .get(DataSource)
+        .query('SELECT token_hash FROM refresh_tokens');
+      expect(rows.map((r) => r.token_hash)).not.toContain(
+        res.body.refreshToken,
+      );
+    });
+
+    it('consumes a refresh token only once under concurrent requests', async () => {
+      const { refreshToken } = await login(USER);
+      const refresh = () => http.post('/auth/refresh').send({ refreshToken });
+
+      const statuses = (await Promise.all([refresh(), refresh(), refresh()]))
+        .map((res) => res.status)
+        .sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 401, 401]);
+    });
+
+    it('rejects an expired refresh token', async () => {
+      const { refreshToken } = await login(USER);
+      await app
+        .get(DataSource)
+        .query(
+          `UPDATE refresh_tokens SET expires_at = now() - interval '1 second'`,
+        );
+
+      await http.post('/auth/refresh').send({ refreshToken }).expect(401);
+    });
+
+    it('logout revokes only the current user refresh token', async () => {
+      const own = await login(USER);
+      const foreign = await registerAndLogin(OTHER);
+
+      await http
+        .post('/auth/logout')
+        .send({ refreshToken: own.refreshToken })
+        .expect(401);
+      await http
+        .post('/auth/logout')
+        .set(bearer(own.accessToken))
+        .send({ refreshToken: foreign.refreshToken })
+        .expect(404);
+      // чужий токен лишився дійсним
+      await http
+        .post('/auth/refresh')
+        .send({ refreshToken: foreign.refreshToken })
+        .expect(200);
+
+      await http
+        .post('/auth/logout')
+        .set(bearer(own.accessToken))
+        .send({ refreshToken: own.refreshToken })
+        .expect(204);
+      await http
+        .post('/auth/refresh')
+        .send({ refreshToken: own.refreshToken })
+        .expect(401);
+      await http
+        .post('/auth/logout')
+        .set(bearer(own.accessToken))
+        .send({ refreshToken: own.refreshToken })
+        .expect(404);
+    });
+  });
+
+  describe('access control', () => {
+    it('keeps the catalogue public and admin routes closed', async () => {
+      const filmId = await createFilm();
+      const hallId = await createHall();
+      const showingId = await createShowing(filmId, hallId);
+
+      for (const path of [
+        '/films',
+        `/films/${filmId}`,
+        '/halls',
+        `/halls/${hallId}`,
+        '/showings',
+        `/showings/${showingId}`,
+        `/showings/${showingId}/seats`,
+      ]) {
+        await http.get(path).expect(200);
+      }
+
+      const adminOnly = [
+        () => http.post('/films').send({}),
+        () => http.patch(`/films/${filmId}`).send({}),
+        () => http.delete(`/films/${filmId}`),
+        () => http.post('/halls').send({}),
+        () => http.delete(`/halls/${hallId}`),
+        () => http.get('/bookings'),
+        () => http.post('/showings').send({}),
+        () => http.get(`/showings/${showingId}/bookings`),
+      ];
+      for (const send of adminOnly) {
+        await send().expect(401);
+        await send().set(asUser()).expect(403);
+      }
+
+      for (const send of [
+        () => http.post(`/showings/${showingId}/bookings`).send({}),
+        () => http.delete(`/bookings/${MISSING_ID}`),
+        () => http.get('/bookings/my'),
+        () => http.post('/auth/logout').send({}),
+        () => http.get('/auth/me'),
+      ]) {
+        await send().expect(401);
+      }
+    });
+
+    it('binds bookings to the token owner and checks ownership on cancel', async () => {
+      const showingId = await createShowing(
+        await createFilm(),
+        await createHall('Зал 1', 3, 5),
+      );
+      const other = await registerAndLogin(OTHER);
+      const me = await http.get('/auth/me').set(asUser()).expect(200);
+
+      const booking = await http
+        .post(`/showings/${showingId}/bookings`)
+        .set(asUser())
+        .send({ seats: [{ row: 1, seat: 1 }], userId: MISSING_ID })
+        .expect(201);
+      expect(booking.body.userId).toBe(me.body.id);
+
+      const mine = await http.get('/bookings/my').set(asUser()).expect(200);
+      expect(mine.body).toHaveLength(1);
+      expect(mine.body[0].showing).toMatchObject({
+        id: showingId,
+        filmTitle: 'Тіні забутих предків',
+        hallName: 'Зал 1',
+      });
+      const othersList = await http
+        .get('/bookings/my')
+        .set(bearer(other.accessToken))
+        .expect(200);
+      expect(othersList.body).toEqual([]);
+
+      await http
+        .delete(`/bookings/${booking.body.id}`)
+        .set(bearer(other.accessToken))
+        .expect(403);
+      await http
+        .delete(`/bookings/${booking.body.id}`)
+        .set(asAdmin())
+        .expect(204);
+      await http.delete(`/bookings/${MISSING_ID}`).set(asUser()).expect(404);
     });
   });
 });

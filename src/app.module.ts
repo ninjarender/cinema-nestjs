@@ -1,7 +1,12 @@
-import { Module, ValidationPipe } from '@nestjs/common';
+import {
+  ClassSerializerInterceptor,
+  Module,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { APP_FILTER, APP_PIPE } from '@nestjs/core';
+import { APP_FILTER, APP_INTERCEPTOR, APP_PIPE } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthModule } from './auth/auth.module.js';
 import { BookingsModule } from './bookings/bookings.module.js';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import {
@@ -11,6 +16,7 @@ import {
 import { FilmsModule } from './films/films.module.js';
 import { HallsModule } from './halls/halls.module.js';
 import { ShowingsModule } from './showings/showings.module.js';
+import { UsersModule } from './users/users.module.js';
 
 @Module({
   imports: [
@@ -33,6 +39,8 @@ import { ShowingsModule } from './showings/showings.module.js';
     HallsModule,
     ShowingsModule,
     BookingsModule,
+    UsersModule,
+    AuthModule, // глобальні JwtAuthGuard і RolesGuard реєструються в ньому
   ],
   providers: [
     // Глобальні складові зареєстровані провайдерами, а не в main.ts,
@@ -45,6 +53,8 @@ import { ShowingsModule } from './showings/showings.module.js';
       }),
     },
     { provide: APP_FILTER, useClass: HttpExceptionFilter },
+    // @Exclude (passwordHash) працює лише через instanceToPlain, тобто цей interceptor
+    { provide: APP_INTERCEPTOR, useClass: ClassSerializerInterceptor },
   ],
 })
 export class AppModule {}

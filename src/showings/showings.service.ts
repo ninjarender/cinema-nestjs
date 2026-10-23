@@ -83,7 +83,7 @@ export class ShowingsService {
       .getManyAndCount();
 
     return {
-      items: showings.map((showing) => this.toView(showing)),
+      items: showings.map((showing) => this.showingsCore.toView(showing)),
       total,
       page,
       limit,
@@ -95,17 +95,6 @@ export class ShowingsService {
       film: true,
       hall: true,
     });
-    return this.toView(showing);
-  }
-
-  /** Очікує сеанс із завантаженими film і hall. */
-  private toView(showing: Showing): ShowingView {
-    return {
-      id: showing.id,
-      filmTitle: showing.film!.title,
-      hallName: showing.hall!.name,
-      startsAt: showing.startsAt,
-      price: showing.price,
-    };
+    return this.showingsCore.toView(showing);
   }
 }

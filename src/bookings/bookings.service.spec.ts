@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -13,6 +14,8 @@ import { ShowingsCoreService } from '../showings/showings-core.service.js';
 import { BookingsService } from './bookings.service.js';
 import { BookingSeat } from './entities/booking-seat.entity.js';
 import { Booking } from './entities/booking.entity.js';
+import { JwtPayload } from '../auth/interfaces/jwt-payload.interface.js';
+import { UserRole } from '../users/user-role.enum.js';
 
 const hall: Hall = { id: 'hall-1', name: 'Зал 1', rows: 3, seatsPerRow: 5 };
 const showing: Showing = {
@@ -23,6 +26,14 @@ const showing: Showing = {
   price: 12500,
   hall,
 };
+
+const OWNER_ID = 'user-1';
+const tokenOf = (sub: string, role: UserRole): JwtPayload => ({
+  sub,
+  role,
+  iat: 0,
+  exp: 0,
+});
 
 const uniqueViolation = () =>
   new QueryFailedError('INSERT', [], {
@@ -42,7 +53,11 @@ describe('BookingsService', () => {
     ),
     getSeats: vi.fn(),
   };
-  const bookingsRepository = { find: vi.fn(), delete: vi.fn() };
+  const bookingsRepository = {
+    find: vi.fn(),
+    findOneBy: vi.fn(),
+    delete: vi.fn(),
+  };
   const bookingSeatsRepository = { find: vi.fn() };
   // manager транзакції: create повертає дані як є, save «генерує» id
   const manager = {
@@ -79,14 +94,23 @@ describe('BookingsService', () => {
   });
 
   it('пише бронювання й місця в одній транзакції, ціна = ціна сеансу × місця', async () => {
-    const booking = await service.create(showing.id, {
-      seats: [
-        { row: 1, seat: 2 },
-        { row: 1, seat: 1 },
-      ],
-    });
+    const booking = await service.create(
+      showing.id,
+      {
+        seats: [
+          { row: 1, seat: 2 },
+          { row: 1, seat: 1 },
+        ],
+      },
+      OWNER_ID,
+    );
 
     expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+    expect(manager.create).toHaveBeenCalledWith(Booking, {
+      showingId: showing.id,
+      userId: OWNER_ID, // власник — з токена, не з тіла
+      totalPrice: 25000,
+    });
     expect(manager.create).toHaveBeenCalledWith(BookingSeat, {
       bookingId: 'booking-1',
       showingId: showing.id,
@@ -112,12 +136,16 @@ describe('BookingsService', () => {
     bookingSeatsRepository.find.mockResolvedValue([{ row: 1, seat: 5 }]);
 
     const error = await service
-      .create(showing.id, {
-        seats: [
-          { row: 2, seat: 1 },
-          { row: 1, seat: 5 },
-        ],
-      })
+      .create(
+        showing.id,
+        {
+          seats: [
+            { row: 2, seat: 1 },
+            { row: 1, seat: 5 },
+          ],
+        },
+        OWNER_ID,
+      )
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ConflictException);
@@ -134,13 +162,13 @@ describe('BookingsService', () => {
     manager.save.mockRejectedValue(fkError);
 
     await expect(
-      service.create(showing.id, { seats: [{ row: 1, seat: 1 }] }),
+      service.create(showing.id, { seats: [{ row: 1, seat: 1 }] }, OWNER_ID),
     ).rejects.toBe(fkError);
   });
 
   it('відхиляє місце поза межами залу без транзакції', async () => {
     await expect(
-      service.create(showing.id, { seats: [{ row: 4, seat: 1 }] }),
+      service.create(showing.id, { seats: [{ row: 4, seat: 1 }] }, OWNER_ID),
     ).rejects.toThrow(BadRequestException);
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
@@ -149,14 +177,49 @@ describe('BookingsService', () => {
     showingsCore.findOne.mockRejectedValue(new NotFoundException());
 
     await expect(
-      service.create('missing', { seats: [{ row: 1, seat: 1 }] }),
+      service.create('missing', { seats: [{ row: 1, seat: 1 }] }, OWNER_ID),
     ).rejects.toThrow(NotFoundException);
     expect(dataSource.transaction).not.toHaveBeenCalled();
   });
 
-  it('повертає 404 на скасування неіснуючого бронювання', async () => {
-    bookingsRepository.delete.mockResolvedValue({ affected: 0, raw: [] });
+  describe('remove — перевірка власника', () => {
+    beforeEach(() => {
+      bookingsRepository.findOneBy.mockResolvedValue({
+        id: 'booking-1',
+        userId: OWNER_ID,
+      });
+    });
 
-    await expect(service.remove('missing')).rejects.toThrow(NotFoundException);
+    it('повертає 404 на скасування неіснуючого бронювання', async () => {
+      bookingsRepository.findOneBy.mockResolvedValue(null);
+
+      await expect(
+        service.remove('missing', tokenOf(OWNER_ID, UserRole.User)),
+      ).rejects.toThrow(NotFoundException);
+      expect(bookingsRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('власник скасовує своє бронювання', async () => {
+      await service.remove('booking-1', tokenOf(OWNER_ID, UserRole.User));
+
+      expect(bookingsRepository.delete).toHaveBeenCalledWith({
+        id: 'booking-1',
+      });
+    });
+
+    it('чуже бронювання → 403 і нічого не видаляється', async () => {
+      await expect(
+        service.remove('booking-1', tokenOf('user-2', UserRole.User)),
+      ).rejects.toThrow(ForbiddenException);
+      expect(bookingsRepository.delete).not.toHaveBeenCalled();
+    });
+
+    it('адміністратор скасовує будь-яке бронювання', async () => {
+      await service.remove('booking-1', tokenOf('admin-1', UserRole.Admin));
+
+      expect(bookingsRepository.delete).toHaveBeenCalledWith({
+        id: 'booking-1',
+      });
+    });
   });
 });
